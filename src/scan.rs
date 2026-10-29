@@ -1,6 +1,6 @@
 //! Library scanning.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -15,12 +15,37 @@ use crate::meta::{self, quest_playable};
 pub struct Snapshot {
     videos: Vec<Video>,
     index: HashMap<i64, usize>,
+    with_subs: HashSet<i64>,
 }
 
 impl Snapshot {
     pub fn new(videos: Vec<Video>) -> Self {
         let index = videos.iter().enumerate().map(|(i, v)| (v.id, i)).collect();
-        Self { videos, index }
+        let mut dirs: HashMap<PathBuf, Vec<String>> = HashMap::new();
+        let with_subs = videos
+            .iter()
+            .filter(|v| {
+                let path = v.abs_path();
+                let (Some(stem), Some(dir)) = (path.file_stem(), path.parent()) else {
+                    return false;
+                };
+                let names = dirs
+                    .entry(dir.to_path_buf())
+                    .or_insert_with(|| crate::subs::dir_file_names(dir));
+                !crate::subs::discover(&stem.to_string_lossy(), names).is_empty()
+            })
+            .map(|v| v.id)
+            .collect();
+        Self {
+            videos,
+            index,
+            with_subs,
+        }
+    }
+
+    /// Whether subtitle sidecars existed when the snapshot was built.
+    pub fn has_subs(&self, id: i64) -> bool {
+        self.with_subs.contains(&id)
     }
 
     pub fn videos(&self) -> &[Video] {
@@ -84,10 +109,24 @@ fn mtime_millis(md: &std::fs::Metadata) -> i64 {
         .unwrap_or(0)
 }
 
+/// Rows written per transaction. Keeping transactions short means a long scan never holds
+/// SQLite's single write lock for long, so progress saves on the other connection get through.
+const BATCH: usize = 200;
+
 /// Scan all libraries, update the database, and return a fresh snapshot.
 pub fn scan(db: &Db, libraries: &[PathBuf]) -> Result<Snapshot> {
+    let mut seen: HashSet<(String, String)> = HashSet::new();
     db.begin()?;
-    match scan_inner(db, libraries) {
+    let res = scan_inner(db, libraries, &mut seen).and_then(|()| {
+        // Anything not seen on disk is marked missing (rows and ids are kept).
+        for (id, root, rel) in db.present_keys()? {
+            if !seen.contains(&(root, rel)) {
+                db.mark_missing(id)?;
+            }
+        }
+        Ok(())
+    });
+    match res {
         Ok(()) => db.commit()?,
         Err(e) => {
             db.rollback();
@@ -97,8 +136,8 @@ pub fn scan(db: &Db, libraries: &[PathBuf]) -> Result<Snapshot> {
     Ok(Snapshot::new(db.list_present()?))
 }
 
-fn scan_inner(db: &Db, libraries: &[PathBuf]) -> Result<()> {
-    db.mark_all_missing()?;
+fn scan_inner(db: &Db, libraries: &[PathBuf], seen: &mut HashSet<(String, String)>) -> Result<()> {
+    let mut in_batch = 0usize;
     for root in libraries {
         let root_str = root.to_string_lossy().into_owned();
         let walker = WalkDir::new(root)
@@ -116,24 +155,35 @@ fn scan_inner(db: &Db, libraries: &[PathBuf]) -> Result<()> {
             if !entry.file_type().is_file() || !is_video_ext(entry.path()) {
                 continue;
             }
-            if let Err(e) = index_file(db, root, &root_str, &entry) {
-                tracing::warn!("failed to index {}: {e}", entry.path().display());
+            match index_file(db, root, &root_str, &entry) {
+                Ok(Some(rel)) => {
+                    seen.insert((root_str.clone(), rel));
+                }
+                Ok(None) => {}
+                Err(e) => tracing::warn!("failed to index {}: {e}", entry.path().display()),
+            }
+            in_batch += 1;
+            if in_batch >= BATCH {
+                db.commit()?;
+                db.begin()?;
+                in_batch = 0;
             }
         }
     }
     Ok(())
 }
 
-fn index_file(db: &Db, root: &Path, root_str: &str, entry: &DirEntry) -> Result<()> {
+/// Index one file; returns its relative path when it is present in the library.
+fn index_file(db: &Db, root: &Path, root_str: &str, entry: &DirEntry) -> Result<Option<String>> {
     let Ok(rel) = entry.path().strip_prefix(root) else {
-        return Ok(());
+        return Ok(None);
     };
     let parts: Vec<String> = rel
         .components()
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
         .collect();
     let Some((_, dirs)) = parts.split_last() else {
-        return Ok(());
+        return Ok(None);
     };
     let rel_path = parts.join("/");
     let folder = dirs.join("/");
@@ -144,7 +194,8 @@ fn index_file(db: &Db, root: &Path, root_str: &str, entry: &DirEntry) -> Result<
 
     if let Some(existing) = db.find(root_str, &rel_path)? {
         if existing.size == size && existing.mtime == mtime {
-            return db.touch_present(root_str, &rel_path);
+            db.touch_present(root_str, &rel_path)?;
+            return Ok(Some(rel_path));
         }
     }
 
@@ -158,7 +209,7 @@ fn index_file(db: &Db, root: &Path, root_str: &str, entry: &DirEntry) -> Result<
     db.upsert(&Video {
         id: 0,
         library_root: root_str.to_string(),
-        rel_path,
+        rel_path: rel_path.clone(),
         title: derive_title(&stem),
         folder,
         size,
@@ -168,7 +219,8 @@ fn index_file(db: &Db, root: &Path, root_str: &str, entry: &DirEntry) -> Result<
         height: m.height,
         codec: m.codec,
         quest_playable: playable,
-    })
+    })?;
+    Ok(Some(rel_path))
 }
 
 #[cfg(test)]

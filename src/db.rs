@@ -1,6 +1,8 @@
 //! SQLite storage for the video library.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -37,9 +39,28 @@ pub struct Existing {
     pub mtime: i64,
 }
 
+/// Watch progress for one video.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Progress {
+    pub position: f64,
+    pub watched: bool,
+}
+
 pub struct Db {
     conn: Connection,
 }
+
+/// Current schema version stored in `PRAGMA user_version`.
+/// 0 = M1 (videos table only), 1 = adds the `progress` table.
+const SCHEMA_VERSION: i64 = 1;
+
+const MIGRATION_1: &str = "
+CREATE TABLE IF NOT EXISTS progress (
+    video_id INTEGER PRIMARY KEY,
+    position REAL NOT NULL DEFAULT 0,
+    watched INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER
+);";
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS videos (
@@ -69,8 +90,105 @@ impl Db {
     }
 
     fn init(conn: Connection) -> Result<Self> {
+        // WAL lets the request connection read and write while a scan transaction is open.
+        // (In-memory databases silently stay in "memory" mode, which is fine.)
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
+        conn.busy_timeout(Duration::from_secs(10))?;
         conn.execute_batch(SCHEMA)?;
+        Self::migrate(&conn)?;
         Ok(Self { conn })
+    }
+
+    fn migrate(conn: &Connection) -> Result<()> {
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version < 1 {
+            conn.execute_batch(MIGRATION_1)?;
+        }
+        if version < SCHEMA_VERSION {
+            conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
+        }
+        Ok(())
+    }
+
+    pub fn schema_version(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))?)
+    }
+
+    /// Progress for every video that has any, keyed by video id.
+    pub fn all_progress(&self) -> Result<HashMap<i64, Progress>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT video_id, position, watched FROM progress")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                Progress {
+                    position: r.get(1)?,
+                    watched: r.get::<_, i64>(2)? != 0,
+                },
+            ))
+        })?;
+        Ok(rows.collect::<std::result::Result<HashMap<_, _>, _>>()?)
+    }
+
+    pub fn get_progress(&self, id: i64) -> Result<Progress> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT position, watched FROM progress WHERE video_id = ?1",
+                params![id],
+                |r| {
+                    Ok(Progress {
+                        position: r.get(0)?,
+                        watched: r.get::<_, i64>(1)? != 0,
+                    })
+                },
+            )
+            .optional()?
+            .unwrap_or_default())
+    }
+
+    /// Save a position. `mark_watched` sets the watched flag; otherwise it is left as is.
+    pub fn set_position(&self, id: i64, position: f64, mark_watched: bool) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO progress (video_id, position, watched, updated_at)
+             VALUES (?1, ?2, ?3, strftime('%s','now'))
+             ON CONFLICT (video_id) DO UPDATE SET
+                position = excluded.position,
+                watched = MAX(watched, excluded.watched),
+                updated_at = excluded.updated_at",
+            params![id, position, mark_watched],
+        )?;
+        Ok(())
+    }
+
+    /// Set the watched flag explicitly; the position is reset to 0.
+    pub fn set_watched(&self, id: i64, watched: bool) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO progress (video_id, position, watched, updated_at)
+             VALUES (?1, 0, ?2, strftime('%s','now'))
+             ON CONFLICT (video_id) DO UPDATE SET
+                position = 0, watched = excluded.watched, updated_at = excluded.updated_at",
+            params![id, watched],
+        )?;
+        Ok(())
+    }
+
+    /// Ids and (root, rel) of all rows not currently marked missing.
+    pub fn present_keys(&self) -> Result<Vec<(i64, String, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, library_root, rel_path FROM videos WHERE missing = 0")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn mark_missing(&self, id: i64) -> Result<()> {
+        self.conn
+            .execute("UPDATE videos SET missing = 1 WHERE id = ?1", params![id])?;
+        Ok(())
     }
 
     pub fn begin(&self) -> Result<()> {
@@ -85,11 +203,6 @@ impl Db {
 
     pub fn rollback(&self) {
         let _ = self.conn.execute_batch("ROLLBACK");
-    }
-
-    pub fn mark_all_missing(&self) -> Result<()> {
-        self.conn.execute("UPDATE videos SET missing = 1", [])?;
-        Ok(())
     }
 
     pub fn find(&self, root: &str, rel: &str) -> Result<Option<Existing>> {
@@ -176,5 +289,59 @@ impl Db {
         Ok(self
             .conn
             .query_row("SELECT COUNT(*) FROM videos", [], |r| r.get(0))?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn progress_roundtrip() {
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(db.get_progress(7).unwrap(), Progress::default());
+        db.set_position(7, 12.5, false).unwrap();
+        assert_eq!(
+            db.get_progress(7).unwrap(),
+            Progress {
+                position: 12.5,
+                watched: false
+            }
+        );
+        db.set_position(7, 0.0, true).unwrap();
+        // A later plain save keeps the watched flag.
+        db.set_position(7, 3.0, false).unwrap();
+        let p = db.get_progress(7).unwrap();
+        assert!(p.watched);
+        assert_eq!(p.position, 3.0);
+        db.set_watched(7, false).unwrap();
+        assert_eq!(db.get_progress(7).unwrap(), Progress::default());
+        assert_eq!(db.all_progress().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn migrates_m1_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.db");
+        {
+            // Exactly the M1 shape: videos table, user_version 0, no progress table.
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(SCHEMA).unwrap();
+            c.execute(
+                "INSERT INTO videos (library_root, rel_path, title, folder, size, mtime)
+                 VALUES ('/r', 'a.mp4', 'a', '', 1, 1)",
+                [],
+            )
+            .unwrap();
+        }
+        let db = Db::open(&path).unwrap();
+        assert_eq!(db.schema_version().unwrap(), SCHEMA_VERSION);
+        assert_eq!(db.list_present().unwrap().len(), 1);
+        db.set_position(1, 5.0, false).unwrap();
+        assert_eq!(db.get_progress(1).unwrap().position, 5.0);
+        drop(db);
+        // Reopening is idempotent and keeps data.
+        let db = Db::open(&path).unwrap();
+        assert_eq!(db.get_progress(1).unwrap().position, 5.0);
     }
 }

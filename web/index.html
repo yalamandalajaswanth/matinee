@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>matinee</title>
+<link rel="stylesheet" href="/assets/app.css">
+<script type="module" src="/assets/app.js"></script>
+</head>
+<body>
+<header class="bar">
+  <h1 class="brand">matinee</h1>
+  <input id="search" type="search" placeholder="Search movies" aria-label="Search" autocomplete="off">
+  <button id="rescan" type="button" class="btn">Rescan</button>
+  <span id="addr" class="addr" title="Address to open in DeoVR"></span>
+</header>
+<div class="layout">
+  <button id="tree-toggle" type="button" class="btn tree-toggle" aria-expanded="true">Folders</button>
+  <select id="folder-select" class="folder-select" aria-label="Folder"></select>
+  <nav id="tree" class="tree" aria-label="Folders"></nav>
+  <main>
+    <div id="empty" class="empty" hidden>No videos found.</div>
+    <div id="grid" class="grid"></div>
+  </main>
+</div>
+<div id="player" class="player" hidden role="dialog" aria-modal="true" aria-label="Player">
+  <div class="player-bar">
+    <button id="close" type="button" class="btn">Close</button>
+    <h2 id="player-title" class="player-title"></h2>
+    <label class="subs-pick">Subtitles
+      <select id="subs-select"><option value="-1">Off</option></select>
+    </label>
+    <button id="watch-toggle" type="button" class="btn">Mark watched</button>
+  </div>
+  <video id="video" controls preload="metadata" playsinline></video>
+  <div id="video-error" class="video-error" role="alert" hidden>
+    <p id="video-error-main"></p>
+    <p id="video-error-sub"></p>
+  </div>
+</div>
+</body>
+</html>

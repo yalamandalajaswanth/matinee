@@ -4,7 +4,6 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use matinee::app::build_router;
 use matinee::config::Cli;
-use matinee::db::Db;
 use matinee::state::AppState;
 use tracing_subscriber::EnvFilter;
 
@@ -19,9 +18,10 @@ async fn main() -> Result<()> {
     let config = Cli::parse().into_config()?;
     std::fs::create_dir_all(&config.data_dir)
         .with_context(|| format!("cannot create data dir {}", config.data_dir.display()))?;
-    let db = Db::open(&config.data_dir.join("library.db")).context("cannot open library.db")?;
+    let db_path = config.data_dir.join("library.db");
 
-    let state = AppState::new(config.libraries.clone(), db);
+    let state =
+        AppState::open(config.libraries.clone(), &db_path).context("cannot open library.db")?;
     let count = state.rescan().await.context("initial scan failed")?;
     tracing::info!(
         "matinee v{} - {count} videos in {} libraries",
