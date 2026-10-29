@@ -1,7 +1,9 @@
 [package]
-name = "deovr-server"
+name = "matinee"
 version = "0.1.0"
 edition = "2021"
+description = "Stream the movies on your PC to DeoVR on Meta Quest over your home network"
+license = "MIT"
 
 [dependencies]
 anyhow = "1.0.104"

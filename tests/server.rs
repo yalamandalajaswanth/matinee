@@ -5,10 +5,10 @@ use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::{header, Method, Request, StatusCode};
 use axum::Router;
-use deovr_server::app::build_router;
-use deovr_server::db::Db;
-use deovr_server::state::AppState;
 use http_body_util::BodyExt;
+use matinee::app::build_router;
+use matinee::db::Db;
+use matinee::state::AppState;
 use tower::ServiceExt;
 
 const LAN: &str = "192.168.1.20:5555";

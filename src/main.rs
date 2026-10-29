@@ -2,10 +2,10 @@ use std::net::SocketAddr;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use deovr_server::app::build_router;
-use deovr_server::config::Cli;
-use deovr_server::db::Db;
-use deovr_server::state::AppState;
+use matinee::app::build_router;
+use matinee::config::Cli;
+use matinee::db::Db;
+use matinee::state::AppState;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -24,7 +24,7 @@ async fn main() -> Result<()> {
     let state = AppState::new(config.libraries.clone(), db);
     let count = state.rescan().await.context("initial scan failed")?;
     tracing::info!(
-        "deovr-server v{} - {count} videos in {} libraries",
+        "matinee v{} - {count} videos in {} libraries",
         env!("CARGO_PKG_VERSION"),
         state.library_count()
     );

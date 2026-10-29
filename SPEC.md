@@ -1,4 +1,4 @@
-# deovr-server — MVP Spec
+# matinee — MVP Spec
 
 A single Windows executable, written in Rust, that serves the 2D MP4 movies on a PC to **DeoVR on a Meta Quest 3** over the local network. It also includes a web portal for browsing and playing them in any browser.
 
@@ -31,12 +31,12 @@ Pitch: *point it at a folder, open the printed address in DeoVR, and watch. No i
 | Frontend | Plain HTML/CSS/JS with no build step, embedded in the binary with `rust-embed` |
 | CLI/config | `clap` |
 | Startup UX | `local-ip-address` to find LAN IPv4 addresses, `qrcode` to print a QR code in the terminal |
-| Data dir | `directories`: `%LOCALAPPDATA%\deovr-server\` holds `library.db` |
+| Data dir | `directories`: `%LOCALAPPDATA%\matinee\` holds `library.db` |
 | Logging | `tracing` + `tracing-subscriber` |
 
 ## CLI
 ```
-deovr-server --library <DIR> [--library <DIR2> ...] [--port 8080] [--bind 0.0.0.0] [--data-dir <DIR>]
+matinee --library <DIR> [--library <DIR2> ...] [--port 8080] [--bind 0.0.0.0] [--data-dir <DIR>]
 ```
 - At least one `--library` is required. If none is given, print help and exit with a non-zero code.
 - If a library directory doesn't exist, log a warning and skip it. If none are valid, exit with an error.
@@ -90,7 +90,7 @@ All absolute URLs are built from the request's `Host` header (scheme `http`), so
 
 ## Startup output
 ```
-deovr-server v0.1.0 — 42 videos in 2 libraries
+matinee v0.1.0 — 42 videos in 2 libraries
 Open in DeoVR (browser) or any browser on your network:
   http://192.168.1.50:8080
 [QR code]

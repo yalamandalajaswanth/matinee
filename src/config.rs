@@ -7,9 +7,9 @@ use clap::Parser;
 /// Command line options.
 #[derive(Debug, Parser)]
 #[command(
-    name = "deovr-server",
+    name = "matinee",
     version,
-    about = "Serve local MP4 movies to DeoVR over the LAN"
+    about = "Stream the movies on your PC to DeoVR on Meta Quest over your home network"
 )]
 pub struct Cli {
     /// Library directory to scan (repeatable, at least one required).
@@ -60,7 +60,7 @@ impl Cli {
         }
         let data_dir = match self.data_dir {
             Some(d) => d,
-            None => directories::ProjectDirs::from("", "", "deovr-server")
+            None => directories::ProjectDirs::from("", "", "matinee")
                 .map(|p| p.data_local_dir().to_path_buf())
                 .context("could not determine a data directory; pass --data-dir")?,
         };

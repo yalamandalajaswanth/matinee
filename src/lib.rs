@@ -1,4 +1,4 @@
-//! deovr-server: serves local MP4 files to DeoVR over the LAN.
+//! matinee: serves local MP4 files to DeoVR over the LAN.
 
 pub mod app;
 pub mod config;
