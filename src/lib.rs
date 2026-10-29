@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod app;
+pub mod banner;
 pub mod config;
 pub mod db;
 pub mod deovr;

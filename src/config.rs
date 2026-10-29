@@ -27,6 +27,10 @@ pub struct Cli {
     /// Directory for the library database (default: platform local data dir).
     #[arg(long, value_name = "DIR")]
     pub data_dir: Option<PathBuf>,
+
+    /// Do not print a QR code in the startup banner.
+    #[arg(long)]
+    pub no_qr: bool,
 }
 
 /// Validated runtime configuration.
@@ -36,6 +40,7 @@ pub struct Config {
     pub port: u16,
     pub bind: IpAddr,
     pub data_dir: PathBuf,
+    pub no_qr: bool,
 }
 
 impl Cli {
@@ -56,7 +61,11 @@ impl Cli {
             }
         }
         if libraries.is_empty() {
-            bail!("no valid library directories were given");
+            bail!(
+                r#"no valid library folder was given. Pass one with --library, for example:
+  matinee --library "D:\Movies"
+(repeat --library to add more folders)"#
+            );
         }
         let data_dir = match self.data_dir {
             Some(d) => d,
@@ -69,6 +78,7 @@ impl Cli {
             port: self.port,
             bind: self.bind,
             data_dir,
+            no_qr: self.no_qr,
         })
     }
 }
@@ -95,5 +105,24 @@ mod tests {
 
         let cli = Cli::parse_from(["x", "--library", "Z:/definitely/not/here"]);
         assert!(cli.into_config().is_err());
+    }
+}
+
+/// Whether the program was started with no arguments at all, which on Windows usually
+/// means a double-click from Explorer (the console would vanish on exit).
+#[cfg(windows)]
+pub fn is_bare_launch<I: IntoIterator>(args: I) -> bool {
+    args.into_iter().nth(1).is_none()
+}
+
+#[cfg(all(test, windows))]
+mod bare_launch_tests {
+    use super::is_bare_launch;
+
+    #[test]
+    fn detects_no_arguments() {
+        assert!(is_bare_launch(["matinee.exe"]));
+        assert!(!is_bare_launch(["matinee.exe", "--help"]));
+        assert!(!is_bare_launch(["matinee.exe", "--library", r"D:\Movies"]));
     }
 }
